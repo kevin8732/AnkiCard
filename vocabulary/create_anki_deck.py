@@ -1,7 +1,8 @@
 import genanki
 import random
 import os
-from gtts import gTTS
+import asyncio
+import edge_tts
 import time
 import re
 
@@ -179,10 +180,6 @@ my_model = genanki.Model(
                     {{Meaning}}
                 </div>
 
-                <!-- 结果显示区域 - 反面版本 -->
-                <div id="result-back" style="text-align: center; margin-top: 20px; display: none; 
-                     padding: 15px; border-radius: 4px; font-size: 18px; font-weight: bold;"></div>
-
                 <!-- 答案区域，始终显示 -->
                 <div id="answer-section-back" style="display: block; margin-top: 30px; 
                      padding: 20px; border-radius: 4px; border: 1px solid #e0e0e0; background: #f9f9f9;">
@@ -207,77 +204,6 @@ my_model = genanki.Model(
                         {{ExampleAudio}}
                     </div>
                 </div>
-
-                <script>
-                    function verifyAnswerBack() {
-                        var userInput = document.getElementById("user-input-back").value.trim();
-                        var correctAnswer = "{{Pronunciation}}";
-                        var resultDiv = document.getElementById("result-back");
-
-                        if (userInput === "") {
-                            resultDiv.innerHTML = "请输入答案";
-                            resultDiv.style.backgroundColor = "#FFF3CD";
-                            resultDiv.style.color = "#856404";
-                            resultDiv.style.display = "block";
-                            return;
-                        }
-
-                        if (userInput === correctAnswer) {
-                            resultDiv.innerHTML = "✓ 答对了！继续加油！";
-                            resultDiv.style.backgroundColor = "#D4EDDA";
-                            resultDiv.style.color = "#155724";
-                        } else {
-                            resultDiv.innerHTML = "✗ 正确答案是: " + correctAnswer + " (再试试吧！)";
-                            resultDiv.style.backgroundColor = "#F8D7DA";
-                            resultDiv.style.color = "#721C24";
-                        }
-
-                        resultDiv.style.display = "block";
-
-                        // 添加动画效果
-                        resultDiv.style.animation = "fadeIn 0.3s ease";
-                    }
-
-                    function clearInputBack() {
-                        document.getElementById("user-input-back").value = "";
-                        document.getElementById("result-back").style.display = "none";
-                        document.getElementById("user-input-back").focus();
-                    }
-
-                    // 反面初始化
-                    document.addEventListener('DOMContentLoaded', function() {
-                        // 设置输入框placeholder颜色
-                        var style = document.createElement('style');
-                        style.innerHTML = `
-                            #user-input-back::placeholder {
-                                color: #888;
-                                opacity: 1;
-                            }
-                            #user-input-back:-ms-input-placeholder {
-                                color: #888;
-                            }
-                            #user-input-back::-ms-input-placeholder {
-                                color: #888;
-                            }
-                            .fade-in {
-                                animation: fadeIn 0.3s ease;
-                            }
-                        `;
-                        document.head.appendChild(style);
-
-                        // 添加回车键支持
-                        document.getElementById("user-input-back").addEventListener("keypress", function(event) {
-                            if (event.key === "Enter") {
-                                verifyAnswerBack();
-                            }
-                        });
-
-                        // 自动聚焦到输入框
-                        setTimeout(function() {
-                            document.getElementById("user-input-back").focus();
-                        }, 100);
-                    });
-                </script>
             ''',
         },
     ],
@@ -351,18 +277,143 @@ my_model = genanki.Model(
     '''
 )
 
+def sanitize_filename(text):
+    """清理文件名中的非法字符，使用更安全的方法"""
+    # 替换所有非字母数字字符为下划线
+    safe_name = re.sub(r'[^a-zA-Z0-9\u4e00-\u9fff\u3040-\u309f\u30a0-\u30ff]', '_', text)
+    # 移除连续的下划线
+    safe_name = re.sub(r'_+', '_', safe_name)
+    # 移除开头和结尾的下划线
+    safe_name = safe_name.strip('_')
+    # 如果清理后为空，使用哈希值
+    if not safe_name:
+        safe_name = str(hash(text))[:8]
+    # 限制文件名长度
+    if len(safe_name) > 50:
+        safe_name = safe_name[:50]
+    return safe_name
 
-def text_to_speech(text, filename, lang='ja'):
-    """使用gTTS将文本转换为语音并保存为MP3文件"""
+def get_default_voice():
+    """返回默认的日语语音"""
+    selected_voice = 'ja-JP-NanamiNeural'
+    print(f"🎤 使用默认语音: {selected_voice} (女声，推荐)")
+    return selected_voice
+
+async def text_to_speech_edge(text, output_path, voice='ja-JP-NanamiNeural', rate='+0%', pitch='+0Hz'):
+    """使用Edge TTS生成语音文件"""
     try:
-        tts = gTTS(text=text, lang=lang, slow=False)
-        tts.save(filename)
-        print(f"已生成音频: {filename}")
+        # 确保输出目录存在
+        os.makedirs(os.path.dirname(output_path), exist_ok=True)
+        
+        # 创建TTS通信对象
+        communicate = edge_tts.Communicate(text, voice, rate=rate, pitch=pitch)
+        
+        # 生成音频文件
+        await communicate.save(output_path)
+        print(f"成功生成音频: {output_path}")
         return True
+        
     except Exception as e:
-        print(f"生成音频失败: {e}")
+        print(f"生成音频失败: {output_path}, 错误: {e}")
         return False
 
+async def generate_audio_files_async(vocabulary_list, audio_dir="audio", selected_voice='ja-JP-NanamiNeural'):
+    """异步为所有单词和例句生成音频文件"""
+    # 创建音频目录
+    if not os.path.exists(audio_dir):
+        os.makedirs(audio_dir)
+
+    total_words = len(vocabulary_list)
+    success_count = 0
+    fail_count = 0
+
+    print(f"开始为 {total_words} 个词汇生成音频文件...")
+
+    # 创建所有音频生成任务
+    tasks = []
+    file_info = []
+
+    for i, word_data in enumerate(vocabulary_list):
+        word = word_data['word']
+        pronunciation = word_data['pronunciation']
+        example = word_data['example']
+
+        # 生成安全的文件名
+        safe_word = sanitize_filename(word)
+        word_audio_file = os.path.join(audio_dir, f"{safe_word}.mp3")
+
+        # 添加单词音频任务（如果不存在）
+        if not os.path.exists(word_audio_file):
+            task = text_to_speech_edge(pronunciation, word_audio_file, selected_voice)
+            tasks.append(task)
+            file_info.append(('word', word, word_audio_file))
+
+        # 添加例句音频任务（如果有例句且不存在）
+        if example:
+            example_audio_file = os.path.join(audio_dir, f"{safe_word}_example.mp3")
+            if not os.path.exists(example_audio_file):
+                task = text_to_speech_edge(example, example_audio_file, selected_voice)
+                tasks.append(task)
+                file_info.append(('example', word, example_audio_file))
+
+    print(f"需要生成 {len(tasks)} 个音频文件...")
+
+    # 批量执行任务，控制并发数量避免过载
+    batch_size = 10  # 每批处理10个任务
+    
+    for i in range(0, len(tasks), batch_size):
+        batch_tasks = tasks[i:i+batch_size]
+        batch_info = file_info[i:i+batch_size]
+        
+        print(f"处理第 {i//batch_size + 1} 批任务 ({len(batch_tasks)} 个文件)...")
+        
+        # 执行当前批次的任务
+        results = await asyncio.gather(*batch_tasks, return_exceptions=True)
+        
+        # 统计结果
+        for j, result in enumerate(results):
+            if isinstance(result, bool) and result:
+                success_count += 1
+            else:
+                fail_count += 1
+                file_type, word, file_path = batch_info[j]
+                print(f"❌ 生成失败: {word} ({file_type})")
+        
+        # 批次间休息
+        if i + batch_size < len(tasks):
+            await asyncio.sleep(2)
+
+    print(f"音频生成完成！成功: {success_count}, 失败: {fail_count}")
+
+def generate_audio_files(vocabulary_list, audio_dir="audio", selected_voice='ja-JP-NanamiNeural'):
+    """同步包装器，调用异步音频生成函数"""
+    # 检查是否有可用的事件循环
+    try:
+        loop = asyncio.get_event_loop()
+        if loop.is_running():
+            # 如果已有运行中的事件循环，创建新的事件循环
+            import threading
+            result = {'success': False}
+            
+            def run_async():
+                new_loop = asyncio.new_event_loop()
+                asyncio.set_event_loop(new_loop)
+                try:
+                    new_loop.run_until_complete(generate_audio_files_async(vocabulary_list, audio_dir, selected_voice))
+                    result['success'] = True
+                finally:
+                    new_loop.close()
+            
+            thread = threading.Thread(target=run_async)
+            thread.start()
+            thread.join()
+            return result['success']
+        else:
+            # 没有运行中的事件循环，直接运行
+            return asyncio.run(generate_audio_files_async(vocabulary_list, audio_dir, selected_voice))
+    except RuntimeError:
+        # 没有事件循环，创建新的
+        return asyncio.run(generate_audio_files_async(vocabulary_list, audio_dir, selected_voice))
 
 def read_vocabulary_from_txt(file_path):
     """从文本文件读取词汇数据，支持例句和章节分类"""
@@ -398,9 +449,6 @@ def read_vocabulary_from_txt(file_path):
                     elif len(parts) == 4:  # 如果只有例句，没有翻译
                         example = parts[3].strip()
                         example_trans = ""  # 留空
-                    else:
-                        # 自动生成例句
-                        example, example_trans = generate_example(word, meaning)
 
                     vocabulary_list.append({
                         'word': word,
@@ -408,78 +456,16 @@ def read_vocabulary_from_txt(file_path):
                         'meaning': meaning,
                         'example': example,
                         'example_trans': example_trans,
-                        'section': current_section if current_section else "未分类"  # 确保有分类
+                        'section': current_section if current_section else "未分类"
                     })
 
     return vocabulary_list
-
-
-def generate_example(word, meaning):
-    """根据单词和意思自动生成例句"""
-    # 简单的例句模板
-    templates = [
-        f"私は{word}が好きです。",
-        f"これは{word}です。",
-        f"{word}は大切です。",
-        f"昨日{word}を見ました。",
-        f"{word}について話しましょう。"
-    ]
-
-    trans_templates = [
-        f"我喜欢{meaning}。",
-        f"这是{meaning}。",
-        f"{meaning}很重要。",
-        f"昨天看到了{meaning}。",
-        f"让我们谈谈{meaning}吧。"
-    ]
-
-    # 随机选择一个模板
-    index = random.randint(0, len(templates) - 1)
-
-    return templates[index], trans_templates[index]
-
-
-def generate_audio_files(vocabulary_list, audio_dir="audio"):
-    """为所有单词和例句生成音频文件"""
-    # 创建音频目录
-    if not os.path.exists(audio_dir):
-        os.makedirs(audio_dir)
-
-    # 为每个单词生成音频
-    for word_data in vocabulary_list:
-        word = word_data['word']
-        pronunciation = word_data['pronunciation']
-        example = word_data['example']
-
-        # 生成单词音频
-        # 使用正则表达式清理文件名，防止特殊字符导致路径问题
-        cleaned_word = re.sub(r'[^\w\s-]', '', word)
-        word_audio_file = os.path.join(audio_dir, f"{cleaned_word}.mp3")
-        if not os.path.exists(word_audio_file):
-            print(f"正在生成单词音频: {word}")
-            success = text_to_speech(pronunciation, word_audio_file)
-            if not success:
-                # 如果生成失败，等待一会儿再试
-                time.sleep(2)
-                text_to_speech(pronunciation, word_audio_file)
-
-        # 生成例句音频（如果有例句）
-        if example:
-            example_audio_file = os.path.join(audio_dir, f"{cleaned_word}_example.mp3")
-            if not os.path.exists(example_audio_file):
-                print(f"正在生成例句音频: {word}")
-                success = text_to_speech(example, example_audio_file)
-                if not success:
-                    # 如果生成失败，等待一会儿再试
-                    time.sleep(2)
-                    text_to_speech(example, example_audio_file)
-
 
 def generate_anki_deck(vocabulary_list, output_file):
     """生成Anki牌组，并按章节分类"""
 
     # 顶层牌组名称
-    top_deck_name = '圆圆-背词听写版'  # 修改为新的名称
+    top_deck_name = '圆圆-背词听写版'
 
     # 用于存放所有子牌组的列表
     all_decks = []
@@ -494,30 +480,32 @@ def generate_anki_deck(vocabulary_list, output_file):
 
     # 为每个章节创建一个子牌组
     for section_name, words_in_section in sections.items():
-        # 构建子牌组的完整名称，直接在顶层牌组下创建章节牌组
-        full_deck_name = f"{top_deck_name}::{section_name}"  # 移除了 'N2日语词汇听写' 层级
+        # 构建子牌组的完整名称
+        full_deck_name = f"{top_deck_name}::{section_name}"
         deck_id = random.randrange(1 << 30, 1 << 31)
         section_deck = genanki.Deck(deck_id, full_deck_name)
 
         for word_data in words_in_section:
-            # 清理单词用于文件名
-            cleaned_word = re.sub(r'[^\w\s-]', '', word_data['word'])
+            # 生成安全的文件名
+            safe_word = sanitize_filename(word_data['word'])
 
             # 生成音频文件名
-            word_audio_file = f"{cleaned_word}.mp3"
+            word_audio_file = f"{safe_word}.mp3"
             audio_filename = f"[sound:{word_audio_file}]"
 
             # 生成例句音频文件名（如果有例句）
             example_audio_filename = ""
             if word_data['example']:
-                example_audio_file = f"{cleaned_word}_example.mp3"
+                example_audio_file = f"{safe_word}_example.mp3"
                 example_audio_filename = f"[sound:{example_audio_file}]"
 
             # 在例句中高亮显示单词
-            highlighted_example = word_data['example'].replace(
-                word_data['word'],
-                f'<span class="highlight">{word_data["word"]}</span>'
-            )
+            highlighted_example = word_data['example']
+            if word_data['example'] and word_data['word'] in word_data['example']:
+                highlighted_example = word_data['example'].replace(
+                    word_data['word'],
+                    f'<span class="highlight">{word_data["word"]}</span>'
+                )
 
             # 创建笔记
             note = genanki.Note(
@@ -552,59 +540,57 @@ def generate_anki_deck(vocabulary_list, output_file):
     package.write_to_file(output_file)
     print(f"Anki牌组已生成: {output_file}")
 
-
 def main():
+    print("🎌 日语Anki卡片生成器 - Edge TTS版")
+    print("=" * 50)
+    
+    # 使用默认语音
+    selected_voice = get_default_voice()
+    
     # 读取词汇数据
-    txt_file = "n2_vocabulary.txt"
+    script_dir = os.path.dirname(os.path.abspath(__file__))
+    txt_file = os.path.join(script_dir, 'n2_vocabulary_completed.txt')
+    
+    if not os.path.exists(txt_file):
+        print(f"❌ 错误: 找不到词汇文件 {txt_file}")
+        print("请确保在脚本同目录下有 'n2_vocabulary_completed.txt' 文件")
+        return
+    
     vocabulary_list = read_vocabulary_from_txt(txt_file)
-
-    print(f"从 {txt_file} 中读取了 {len(vocabulary_list)} 个词汇")
+    print(f"📚 从 {txt_file} 中读取了 {len(vocabulary_list)} 个词汇")
 
     # 生成音频文件
-    print("开始生成音频文件...")
-    generate_audio_files(vocabulary_list)
-    print("音频文件生成完成")
+    print(f"🎵 开始使用 {selected_voice} 生成音频...")
+    
+    success = generate_audio_files(vocabulary_list, "audio", selected_voice)
+    
+    if success:
+        print("✅ 音频文件生成完成")
+    else:
+        print("⚠️ 音频生成过程中出现一些问题，但会继续生成Anki卡片")
 
     # 生成Anki牌组
-    output_file = "N2_日语词汇_圆圆背词听写版_优化.apkg"  # 修改输出文件名以匹配顶层牌组名
+    output_file = "N2_日语词汇_圆圆背词听写版_EdgeTTS.apkg"
     generate_anki_deck(vocabulary_list, output_file)
 
-    # 显示一些统计信息
+    # 显示统计信息
     sections = {}
     for word in vocabulary_list:
         section = word['section']
         sections[section] = sections.get(section, 0) + 1
 
-    print("\n各章节词汇数量:")
+    print("\n📊 各章节词汇数量:")
     for section, count in sections.items():
-        print(f"{section}: {count} 个词汇")
+        print(f"  {section}: {count} 个词汇")
 
-    # 提供使用说明
-    print("\n✨ 使用说明（优化版）:")
-    print("📱 正面功能:")
-    print("  • 显示单词和中文意思，要求输入假名读音")
-    print("  • 支持键盘回车键快速提交")
-    print("  • 实时答案验证和视觉反馈")
-    print("  • 一键重新验证功能")
+    print("\n✨ 使用说明:")
+    print("📱 正面功能: 显示单词和中文意思，要求输入假名读音")
+    print("📱 反面功能: 显示正确答案、音频和例句") 
+    print("🎯 学习建议: 先尝试回忆，再查看答案，使用Anki评分按钮")
+    print("🎤 语音特色: 使用微软Edge TTS，音质清晰自然")
 
-    print("\n📱 反面功能（最终简化版）:")
-    print("  • ✅ 纯答案显示：反面只显示答案，简洁清晰")
-    print("  • ✅ 完整信息：显示正确读音、音频、例句及翻译")
-    print("  • ✅ 无复杂交互：专注于查看答案，不干扰学习")
-    print("  • ✅ 标准Anki体验：使用底部评分按钮进行学习记录")
-
-    print("\n🎯 学习建议:")
-    print("  1. 在正面尝试回忆和输入答案")
-    print("  2. 点击'显示答案'查看反面的完整答案")
-    print("  3. 查看正确读音、听音频、学习例句")
-    print("  4. 使用Anki底部的Again/Hard/Good/Easy按钮评分")
-    print("  5. 简单直接的学习流程，专注于记忆效果")
-
-    print("\n📊 生成完成:")
-    print(f"  • 文件名: {output_file}")
-    print(f"  • 音频文件: audio/ 文件夹")
-    print(f"  • 总词汇量: {len(vocabulary_list)} 个")
-
+    print(f"\n🎉 生成完成: {output_file}")
+    print("💡 提示: 首次安装需要运行: pip install edge-tts genanki")
 
 if __name__ == "__main__":
     main()
