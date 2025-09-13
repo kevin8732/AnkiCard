@@ -1,9 +1,82 @@
 {
-    // Use IntelliSense to learn about possible attributes.
-    // Hover to view descriptions of existing attributes.
-    // For more information, visit: https://go.microsoft.com/fwlink/?linkid=830387
     "version": "0.2.0",
     "configurations": [
-
+        
+        {
+            "name": "Python: 运行 create_anki_deck.py",
+            "type": "python",
+            "request": "launch",
+            "program": "${workspaceFolder}/create_anki_deck.py",
+            "console": "integratedTerminal",
+            "justMyCode": true,
+            "env": {
+                "PYTHONPATH": "${workspaceFolder}"
+            },
+            "args": []
+        },
+        {
+            "name": "Python: 运行 complete_vocabulary.py",
+            "type": "python",
+            "request": "launch",
+            "program": "${workspaceFolder}/complete_vocabulary.py",
+            "console": "integratedTerminal",
+            "justMyCode": true,
+            "env": {
+                "PYTHONPATH": "${workspaceFolder}"
+            }
+        },
+        {
+            "name": "Python: 创建Anki卡片（带输入文件）",
+            "type": "python",
+            "request": "launch",
+            "program": "${workspaceFolder}/create_anki_deck.py",
+            "args": [
+                "--input",
+                "n2_vocabulary_completed.txt",
+                "--output",
+                "anki_deck.apkg"
+            ],
+            "console": "integratedTerminal",
+            "env": {
+                "DEBUG": "true"
+            }
+        },
+        {
+            "name": "Python: 处理词汇数据",
+            "type": "python",
+            "request": "launch",
+            "program": "${workspaceFolder}/complete_vocabulary.py",
+            "args": [
+                "n2_vocabulary.csv",
+                "n2_vocabulary_completed.txt"
+            ],
+            "console": "integratedTerminal"
+        },
+        {
+            "name": "Python: 调试当前文件",
+            "type": "python",
+            "request": "launch",
+            "program": "${file}",
+            "console": "integratedTerminal",
+            "justMyCode": true
+        },
+        {
+            "name": "Python: 使用模块调试",
+            "type": "python",
+            "request": "launch",
+            "module": "pytest",
+            "args": [
+                "-v",
+                "tests/"
+            ],
+            "console": "integratedTerminal"
+        },
+        {
+            "name": "Python: 附加到进程",
+            "type": "python",
+            "request": "attach",
+            "processId": "${command:pickProcess}",
+            "justMyCode": false
+        }
     ]
 }

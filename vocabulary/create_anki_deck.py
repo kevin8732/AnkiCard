@@ -348,8 +348,8 @@ async def generate_audio_files_async(vocabulary_list, audio_dir="audio", selecte
             tasks.append(task)
             file_info.append(('word', word, word_audio_file))
 
-        # 添加例句音频任务（如果有例句且不存在）
-        if example:
+        # 添加例句音频任务（如果有真实例句且不存在）
+        if example and example.strip():  # 检查例句是否非空
             example_audio_file = os.path.join(audio_dir, f"{safe_word}_example.mp3")
             if not os.path.exists(example_audio_file):
                 task = text_to_speech_edge(example, example_audio_file, selected_voice)
@@ -384,7 +384,7 @@ async def generate_audio_files_async(vocabulary_list, audio_dir="audio", selecte
             await asyncio.sleep(2)
 
     print(f"音频生成完成！成功: {success_count}, 失败: {fail_count}")
-
+    
 def generate_audio_files(vocabulary_list, audio_dir="audio", selected_voice='ja-JP-NanamiNeural'):
     """同步包装器，调用异步音频生成函数"""
     # 检查是否有可用的事件循环
